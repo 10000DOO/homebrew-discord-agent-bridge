@@ -16,7 +16,7 @@ TOKEN="${2:-}"
 
 # brew services launches dab under launchd's minimal PATH (no /opt/homebrew/bin) — same root
 # cause swift/scripts/install.sh's generated run.sh works around for the dab process itself.
-export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:$PATH"
 
 DAB_HOME="$HOME/.dab"
 LOG_DIR="$DAB_HOME/logs"
@@ -39,6 +39,8 @@ json_escape() {
   printf '%s' "$s"
 }
 
+# Discord interaction followup — retry on transient failures / token propagation lag.
+# wait=true so we get a real HTTP body and avoid silent 204-only fire-and-forget misses.
 notify() {
   local msg="$1"
   log "notify: $msg"
@@ -46,15 +48,55 @@ notify() {
     log "webhook skipped (missing application id/token)"
     return 0
   fi
-  local http_code
-  http_code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-    "https://discord.com/api/v10/webhooks/${APP_ID}/${TOKEN}" \
-    -H "Content-Type: application/json" \
-    -d "{\"content\": \"$(json_escape "$msg")\"}")"
-  log "webhook POST -> HTTP $http_code"
+  local try code body
+  for try in 1 2 3 4 5; do
+    body="$(mktemp)"
+    # --globoff: interaction tokens can contain characters curl would treat as globs.
+    code="$(curl -sS --globoff -o "$body" -w '%{http_code}' -X POST \
+      "https://discord.com/api/v10/webhooks/${APP_ID}/${TOKEN}?wait=true" \
+      -H "Content-Type: application/json" \
+      -d "{\"content\": \"$(json_escape "$msg")\"}" 2>>"$LOG_FILE")" || code="curl-fail"
+    log "webhook try=${try} HTTP=${code} body=$(head -c 200 "$body" 2>/dev/null | tr '\n' ' ')"
+    rm -f "$body"
+    case "$code" in
+      200|204) return 0 ;;
+    esac
+    sleep $((try * 2))
+  done
+  log "webhook FAILED after retries"
+  return 1
 }
 
-log "=== update start ==="
+brew_dab_started() {
+  brew services list 2>/dev/null | awk '$1=="dab" && $2=="started" {found=1} END{exit !found}'
+}
+
+# Full stop then start with retries (more reliable than a single `restart` under launchd).
+restart_dab_service() {
+  local label="${1:-restart}"
+  local attempt i
+  for attempt in 1 2 3; do
+    log "brew services stop+start dab (${label} attempt ${attempt})"
+    brew services stop dab >>"$LOG_FILE" 2>&1 || true
+    sleep 1
+    if ! brew services start dab >>"$LOG_FILE" 2>&1; then
+      brew services restart dab >>"$LOG_FILE" 2>&1 || true
+    fi
+    for i in $(seq 1 30); do
+      if brew_dab_started; then
+        log "brew service started (${label} attempt ${attempt}, after ${i}s)"
+        return 0
+      fi
+      sleep 1
+    done
+    log "brew service not started after attempt ${attempt} (${label})"
+    sleep 2
+  done
+  return 1
+}
+
+log "=== update start pid=$$ ==="
+log "APP_ID set=$([ -n "$APP_ID" ] && echo yes || echo no) TOKEN set=$([ -n "$TOKEN" ] && echo yes || echo no)"
 
 prev_version="$(brew list --versions dab 2>/dev/null | awk '{print $NF}')"
 log "previous version: ${prev_version:-<unknown>}"
@@ -78,10 +120,9 @@ if ! HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade dab >> "$LOG_FILE" 2>&1; then
   exit 1
 fi
 
-log "brew services restart dab"
-if ! brew services restart dab >> "$LOG_FILE" 2>&1; then
-  log "FAILED: brew services restart dab"
-  notify "❌ dab 업데이트 실패: 새 버전 설치는 됐지만 서비스 재시작에 실패했어요. 수동 확인이 필요해요."
+if ! restart_dab_service "post-upgrade"; then
+  log "FAILED: brew services restart dab after upgrade"
+  notify "❌ dab 업데이트 실패: 새 버전 설치는 됐지만 서비스 재시작에 실패했어요. 수동 확인이 필요해요. 로그: \`~/.dab/logs/homebrew-update.log\`"
   exit 1
 fi
 
@@ -102,14 +143,14 @@ log "marker not detected within ${READY_TIMEOUT}s -> attempting rollback"
 
 if [ -z "$prev_version" ]; then
   log "no previous version recorded -> cannot roll back"
-  notify "⚠️ dab 업데이트 후 정상 기동을 확인하지 못했고, 이전 버전 정보가 없어 자동 롤백도 못 했어요. 수동으로 확인해주세요."
+  notify "⚠️ dab 업데이트 후 정상 기동을 확인하지 못했고, 이전 버전 정보가 없어 자동 롤백도 못 했어요. 수동으로 확인해주세요. 로그: \`~/.dab/logs/homebrew-update.log\`"
   exit 1
 fi
 
 cellar_dir="$(brew --cellar)/dab/${prev_version}"
 if [ ! -d "$cellar_dir" ]; then
   log "FAILED: previous keg missing at $cellar_dir"
-  notify "⚠️ dab 업데이트 후 정상 기동을 확인하지 못했지만, 이전 버전(${prev_version}) 설치본을 찾지 못해 자동 롤백도 못 했어요. 수동으로 확인해주세요."
+  notify "⚠️ dab 업데이트 후 정상 기동을 확인하지 못했지만, 이전 버전(${prev_version}) 설치본을 찾지 못해 자동 롤백도 못 했어요. 수동으로 확인해주세요. 로그: \`~/.dab/logs/homebrew-update.log\`"
   exit 1
 fi
 
@@ -125,14 +166,14 @@ if ! brew ruby -e '
   target.link(overwrite: true)
 ' -- "$cellar_dir" >> "$LOG_FILE" 2>&1; then
   log "FAILED: relink previous keg"
-  notify "⚠️ dab 업데이트 실패 후 롤백 중 오류가 발생했어요(이전 버전: ${prev_version}). 수동 확인이 필요해요."
+  notify "⚠️ dab 업데이트 실패 후 롤백 중 오류가 발생했어요(이전 버전: ${prev_version}). 수동 확인이 필요해요. 로그: \`~/.dab/logs/homebrew-update.log\`"
   exit 1
 fi
 
-log "brew services restart dab (post-rollback)"
-if ! brew services restart dab >> "$LOG_FILE" 2>&1; then
+rm -f "$MARKER"
+if ! restart_dab_service "post-rollback"; then
   log "FAILED: brew services restart dab (post-rollback)"
-  notify "⚠️ 이전 버전(${prev_version})으로 되돌렸지만 서비스 재시작에 실패했어요. 수동 확인이 필요해요."
+  notify "⚠️ 이전 버전(${prev_version})으로 되돌렸지만 서비스 재시작에 실패했어요. 수동 확인이 필요해요. 로그: \`~/.dab/logs/homebrew-update.log\`"
   exit 1
 fi
 
