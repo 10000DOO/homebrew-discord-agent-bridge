@@ -1,8 +1,8 @@
 class Dab < Formula
   desc "Self-hosted Discord bot running Claude Code / Codex / Grok per channel (discord-agent-bridge)"
   homepage "https://github.com/10000DOO/discord-agent-bridge"
-  url "https://github.com/10000DOO/discord-agent-bridge/archive/refs/tags/v2.1.1.tar.gz"
-  sha256 "3dede54c9fd106b16765e9a536ddc1cebed19795156cff512580de1a43ce9f51"
+  url "https://github.com/10000DOO/discord-agent-bridge/archive/refs/tags/v2.1.2.tar.gz"
+  sha256 "0989fbaa574126c8c04e357dfd8af8996649ce56d1945a73319c222807b01444"
   license "MIT"
 
   # Node.js and Swift are checked (not installed) in #install below — see the
