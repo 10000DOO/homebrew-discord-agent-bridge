@@ -1,8 +1,8 @@
 class Dab < Formula
   desc "Self-hosted Discord bot running Claude Code / Codex / Grok per channel (discord-agent-bridge)"
   homepage "https://github.com/10000DOO/discord-agent-bridge"
-  url "https://github.com/10000DOO/discord-agent-bridge/archive/refs/tags/v2.0.0.tar.gz"
-  sha256 "5b3f940be5b84c295233a658830904d1782646bb802407574e20b656cd89b494"
+  url "https://github.com/10000DOO/discord-agent-bridge/archive/refs/tags/v2.0.1.tar.gz"
+  sha256 "175374d91c02efcd361193cdfe319301253cbdfcbca46462d8d5ba0252d8214d"
   license "MIT"
 
   # Node.js and Swift are checked (not installed) in #install below — see the
@@ -101,12 +101,22 @@ class Dab < Formula
     # (swift/scripts/install.sh의 run.sh 생성부와 같은 "얇은 래퍼" 방식). node도 설치 시점에
     # 확인한 절대 경로를 그대로 박아서, dab을 나중에 launchd 등 PATH가 없는 곳에서
     # 실행해도 사이드카를 못 찾는 일이 없게 한다.
+    # 시크릿(DISCORD_BOT_TOKEN 등)은 install.sh 방식과 동일하게 ~/.dab/env(0600) 하나로만
+    # 관리한다 — Formula가 그 파일을 만들지는 않고, 있으면 읽어들이기만 한다.
     (bin/"dab").write <<~EOS
       #!/bin/bash
+      [ -f "$HOME/.dab/env" ] && source "$HOME/.dab/env"
       export DAB_CLAUDE_SIDECAR_CMD="#{node} #{libexec}/node_modules/tsx/dist/cli.mjs #{libexec}/src/sidecar/claude/cli.ts"
       exec "#{libexec}/dab-bin" "$@"
     EOS
     chmod 0755, bin/"dab"
+  end
+
+  service do
+    run [opt_bin/"dab"]
+    keep_alive true
+    log_path var/"log/dab.log"
+    error_log_path var/"log/dab.error.log"
   end
 
   test do
