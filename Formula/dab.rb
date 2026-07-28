@@ -89,6 +89,10 @@ class Dab < Formula
     # npm이 없어서 실패한다(node를 ORIGINAL_PATHS로 찾아야 했던 것과 같은 이유).
     npm = node.dirname/"npm"
     odie "node는 있지만 그 옆에 npm이 없습니다: #{npm}" unless npm.executable?
+    # npm 자체가 `#!/usr/bin/env node` 셔뱅 스크립트라, 절대 경로로 실행해도 실행 시점
+    # PATH에 node가 없으면 "env: node: No such file or directory"로 죽는다.
+    # ORIGINAL_PATHS로 찾은 node의 디렉터리를 이 설치 단계 PATH에만 추가해준다.
+    ENV.prepend_path "PATH", node.dirname
     system npm, "install", "--prefix", libexec
 
     # findRepoRoot()가 cwd 기준으로 package.json + src/sidecar/claude/cli.ts를 찾는데,
