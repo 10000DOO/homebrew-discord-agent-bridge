@@ -48,3 +48,20 @@ brew services list          # check status
 ```
 
 Logs go to `$(brew --prefix)/var/log/dab.log` / `dab.error.log`.
+
+## `/update` (Discord slash command)
+
+When `dab` runs as a `brew services` background service (as set up above), approving `/update`
+in Discord fully automates the upgrade — no manual `brew` commands needed:
+
+1. `brew update` + `brew upgrade dab` to the latest release.
+2. `brew services restart dab`.
+3. Waits (up to ~90s) for the new process to actually reconnect to Discord's gateway.
+4. If it reconnects in time: posts a success message back to the same Discord channel.
+5. If it doesn't (crash, bad build, gateway auth failure, ...): automatically reverts to the
+   previously installed version, restarts it, and posts a rollback notice to Discord instead.
+
+This runs as a detached script (`homebrew-self-update.sh`, installed alongside `dab`) so it
+survives the old `dab` process exiting mid-restart. Progress is also logged to
+`~/.dab/logs/homebrew-update.log`. Nothing needs to be configured — the formula wires this up
+automatically for `brew`-installed `dab`.

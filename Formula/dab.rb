@@ -1,8 +1,8 @@
 class Dab < Formula
   desc "Self-hosted Discord bot running Claude Code / Codex / Grok per channel (discord-agent-bridge)"
   homepage "https://github.com/10000DOO/discord-agent-bridge"
-  url "https://github.com/10000DOO/discord-agent-bridge/archive/refs/tags/v2.0.1.tar.gz"
-  sha256 "175374d91c02efcd361193cdfe319301253cbdfcbca46462d8d5ba0252d8214d"
+  url "https://github.com/10000DOO/discord-agent-bridge/archive/refs/tags/v2.1.0.tar.gz"
+  sha256 "be312a69da3a9594e33c105a63024fe3d376ede8de299a744cd6aec9ed2c0f5d"
   license "MIT"
 
   # Node.js and Swift are checked (not installed) in #install below — see the
@@ -107,9 +107,20 @@ class Dab < Formula
       #!/bin/bash
       [ -f "$HOME/.dab/env" ] && source "$HOME/.dab/env"
       export DAB_CLAUDE_SIDECAR_CMD="#{node} #{libexec}/node_modules/tsx/dist/cli.mjs #{libexec}/src/sidecar/claude/cli.ts"
+      export DAB_INSTALL_METHOD="homebrew"
+      export DAB_HOMEBREW_UPDATE_SCRIPT="#{libexec}/homebrew-self-update.sh"
       exec "#{libexec}/dab-bin" "$@"
     EOS
     chmod 0755, bin/"dab"
+
+    # Discord's `/update` spawns this detached (see DAB_HOMEBREW_UPDATE_SCRIPT above) to own
+    # upgrade -> restart -> verify -> rollback, since the process it replaces can't do that to
+    # itself. It must be executable directly (spawned by absolute path, not via a shell).
+    # buildpath (cwd here) is the extracted release tarball, which doesn't contain this
+    # tap-only script — read it from the tap via __dir__ instead (verified to resolve to this
+    # Formula's own directory under Homebrew's module_eval-based formula loading).
+    (libexec/"homebrew-self-update.sh").write (Pathname(__dir__)/"../scripts/homebrew-self-update.sh").read
+    chmod 0755, libexec/"homebrew-self-update.sh"
   end
 
   service do
@@ -117,6 +128,9 @@ class Dab < Formula
     keep_alive true
     log_path var/"log/dab.log"
     error_log_path var/"log/dab.error.log"
+    # Path the running dab writes to once Discord's gateway READY fires (any normal boot, not
+    # just updates) — homebrew-self-update.sh polls this exact path after a restart it triggers.
+    environment_variables DAB_SUCCESSOR_READY_FILE: "#{Dir.home}/.dab/homebrew-ready-marker"
   end
 
   test do
