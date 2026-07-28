@@ -73,7 +73,10 @@ class Dab < Formula
     end
 
     # Swift 실행 파일 빌드 (executable product "dab" -> swift/.build/release/dab)
-    system swift, "build", "--package-path", "swift", "-c", "release"
+    # --disable-sandbox: Homebrew의 install 단계는 이미 자체 sandbox-exec 안에서 돈다.
+    # SwiftPM이 Package.swift 매니페스트 컴파일에 자기 sandbox까지 추가로 걸려고 하면
+    # 중첩 sandbox_apply가 거부돼("Operation not permitted") 빌드 자체가 실패한다.
+    system swift, "build", "--package-path", "swift", "-c", "release", "--disable-sandbox"
     libexec.install "swift/.build/release/dab" => "dab-bin"
 
     # 클로드 사이드카(Node/TS)는 cli.ts 하나만으로 뜨지 않는다 — core/, modes/claude/,
