@@ -12,7 +12,13 @@ class Dab < Formula
     # Node.js: check only. `depends_on "node"` would let Homebrew silently install/upgrade
     # Node, which this project's release process explicitly does not want — the user manages
     # their own Node.js.
-    node = which("node")
+    #
+    # `which("node")` alone checks superenv's sanitized build PATH, which excludes
+    # user toolchain managers (nvm, volta, fnm, ...) — a Node installed that way would be
+    # reported as "missing" even though it exists. ORIGINAL_PATHS is the user's real PATH
+    # captured before Homebrew sanitizes it; this is the same idiom Homebrew itself uses to
+    # detect user-installed npm/cargo/etc. (bundle/extensions/npm.rb, cargo.rb).
+    node = which("node", ORIGINAL_PATHS)
     odie <<~EOS if node.nil?
       Node.js가 필요합니다 (버전 20 이상). discord-agent-bridge의 클로드 백엔드는
       Node.js 기반 사이드카 프로세스로 동작합니다.
@@ -38,7 +44,8 @@ class Dab < Formula
 
     # Swift: check only. Homebrew has no way to auto-install Xcode anyway, but the error
     # message below is our own — do not rely on the generic `depends_on :xcode` message.
-    swift = which("swift")
+    # Same ORIGINAL_PATHS reasoning as node above (Xcode CLT's swift isn't in superenv's PATH).
+    swift = which("swift", ORIGINAL_PATHS)
     odie <<~EOS if swift.nil?
       Swift 툴체인이 필요합니다 (6.1 이상). Xcode 또는 Command Line Tools를 설치해주세요:
 
@@ -74,15 +81,22 @@ class Dab < Formula
     libexec.install "package.json", "package-lock.json", "src"
     # tsx는 devDependencies에 있지만 사이드카를 tsx로 실행하는 한 런타임에 필요하다.
     # `--omit=dev`를 쓰면 안 된다.
-    system "npm", "install", "--prefix", libexec
+    # npm은 PATH가 아니라 위에서 확인한 node와 같은 디렉터리에서 직접 찾는다 — "npm"을
+    # 그대로 시스템 호출하면 superenv가 좁혀놓은 빌드용 PATH에는 nvm 등으로 설치된
+    # npm이 없어서 실패한다(node를 ORIGINAL_PATHS로 찾아야 했던 것과 같은 이유).
+    npm = node.dirname/"npm"
+    odie "node는 있지만 그 옆에 npm이 없습니다: #{npm}" unless npm.executable?
+    system npm, "install", "--prefix", libexec
 
     # findRepoRoot()가 cwd 기준으로 package.json + src/sidecar/claude/cli.ts를 찾는데,
     # brew로 설치하면 사용자는 임의의 디렉터리에서 dab을 실행하므로 이 탐색은 항상 실패한다.
     # DAB_CLAUDE_SIDECAR_CMD로 사이드카 경로를 고정 지정해 cwd와 무관하게 만든다
-    # (swift/scripts/install.sh의 run.sh 생성부와 같은 "얇은 래퍼" 방식).
+    # (swift/scripts/install.sh의 run.sh 생성부와 같은 "얇은 래퍼" 방식). node도 설치 시점에
+    # 확인한 절대 경로를 그대로 박아서, dab을 나중에 launchd 등 PATH가 없는 곳에서
+    # 실행해도 사이드카를 못 찾는 일이 없게 한다.
     (bin/"dab").write <<~EOS
       #!/bin/bash
-      export DAB_CLAUDE_SIDECAR_CMD="node #{libexec}/node_modules/tsx/dist/cli.mjs #{libexec}/src/sidecar/claude/cli.ts"
+      export DAB_CLAUDE_SIDECAR_CMD="#{node} #{libexec}/node_modules/tsx/dist/cli.mjs #{libexec}/src/sidecar/claude/cli.ts"
       exec "#{libexec}/dab-bin" "$@"
     EOS
     chmod 0755, bin/"dab"
