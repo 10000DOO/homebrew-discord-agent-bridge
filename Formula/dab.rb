@@ -1,8 +1,8 @@
 class Dab < Formula
   desc "Self-hosted Discord bot running Claude Code / Codex / Grok per channel (discord-agent-bridge)"
   homepage "https://github.com/10000DOO/discord-agent-bridge"
-  url "https://github.com/10000DOO/discord-agent-bridge/archive/refs/tags/v3.7.0.tar.gz"
-  sha256 "3135bc317ba5e1114cdf4dd2932a029801c58552693e16554f9b69de290eb788"
+  url "https://github.com/10000DOO/discord-agent-bridge/archive/refs/tags/v3.7.1.tar.gz"
+  sha256 "8bce36852c800cebc4c3defc00888544d280f1ed23634d47a48c427e3c13f142"
   license "MIT"
 
   # Node.js and Swift are checked (not installed) in #install below — see the
@@ -18,7 +18,19 @@ class Dab < Formula
     # reported as "missing" even though it exists. ORIGINAL_PATHS is the user's real PATH
     # captured before Homebrew sanitizes it; this is the same idiom Homebrew itself uses to
     # detect user-installed npm/cargo/etc. (bundle/extensions/npm.rb, cargo.rb).
-    node = which("node", ORIGINAL_PATHS)
+    # scripts/find-node.sh (shipped in the tarball) is the single rule set for locating Node
+    # across every install method — nvm/volta/fnm/asdf/mise/n put it under a per-version
+    # directory in $HOME that `which("node", ORIGINAL_PATHS)` cannot see whenever brew is
+    # invoked with anything other than a full login PATH (launchd, a sanitized shell, the
+    # self-update script). ORIGINAL_PATHS is still tried first *inside* that script, so a
+    # user's own choice on PATH still wins.
+    finder = buildpath/"scripts/find-node.sh"
+    node = nil
+    if finder.exist?
+      found = Utils.popen_read("/bin/bash", finder.to_s, err: :close).strip
+      node = Pathname(found) if !found.empty? && File.executable?(found)
+    end
+    node ||= which("node", ORIGINAL_PATHS)
     odie <<~EOS if node.nil?
       Node.js가 필요합니다 (버전 20 이상). discord-agent-bridge의 클로드 백엔드는
       Node.js 기반 사이드카 프로세스로 동작합니다.
@@ -82,6 +94,16 @@ class Dab < Formula
     # 클로드 사이드카(Node/TS)는 cli.ts 하나만으로 뜨지 않는다 — core/, modes/claude/,
     # discord/documentShare.js 까지 상대 경로로 임포트하므로 src 전체를 같이 설치해야 한다.
     libexec.install "package.json", "package-lock.json", "src"
+    # The wrapper and homebrew-self-update.sh both re-resolve Node at run time, so the finder
+    # has to live in the keg, not just in the build directory.
+    #
+    # Guarded on existence so this formula still installs a release tarball from before the
+    # finder existed: both consumers already fall back to the install-time path when it is
+    # missing, so an older tarball simply keeps the old behaviour instead of failing to build.
+    if finder.exist?
+      libexec.install "scripts/find-node.sh"
+      chmod 0755, libexec/"find-node.sh"
+    end
     # tsx는 devDependencies에 있지만 사이드카를 tsx로 실행하는 한 런타임에 필요하다.
     # `--omit=dev`를 쓰면 안 된다.
     # npm은 PATH가 아니라 위에서 확인한 node와 같은 디렉터리에서 직접 찾는다 — "npm"을
@@ -103,10 +125,18 @@ class Dab < Formula
     # 실행해도 사이드카를 못 찾는 일이 없게 한다.
     # 시크릿(DISCORD_BOT_TOKEN 등)은 install.sh 방식과 동일하게 ~/.dab/env(0600) 하나로만
     # 관리한다 — Formula가 그 파일을 만들지는 않고, 있으면 읽어들이기만 한다.
+    # Node is resolved at EVERY launch, not baked in. A version manager installs into a
+    # per-version directory (~/.nvm/versions/node/v24.12.0/bin/node); baking that string means
+    # the next `nvm install` silently breaks the Claude sidecar AND the updater's own Node
+    # lookup at the same time. The install-time path is kept as the last-resort fallback for
+    # machines with no version manager, which is what find-node.sh consults last.
     (bin/"dab").write <<~EOS
       #!/bin/bash
       [ -f "$HOME/.dab/env" ] && source "$HOME/.dab/env"
-      export DAB_CLAUDE_SIDECAR_CMD="#{node} #{libexec}/node_modules/tsx/dist/cli.mjs #{libexec}/src/sidecar/claude/cli.ts"
+      export DAB_NODE_FALLBACK_DIR="#{node.dirname}"
+      dab_node="$(/bin/bash "#{libexec}/find-node.sh" 2>/dev/null || true)"
+      [ -x "$dab_node" ] || dab_node="#{node}"
+      export DAB_CLAUDE_SIDECAR_CMD="$dab_node #{libexec}/node_modules/tsx/dist/cli.mjs #{libexec}/src/sidecar/claude/cli.ts"
       export DAB_INSTALL_METHOD="homebrew"
       export DAB_HOMEBREW_UPDATE_SCRIPT="#{libexec}/homebrew-self-update.sh"
       exec "#{libexec}/dab-bin" "$@"

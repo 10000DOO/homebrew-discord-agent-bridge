@@ -20,12 +20,24 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin
 
 # Formula#install probes Node with which("node", ORIGINAL_PATHS) — ORIGINAL_PATHS being the
 # PATH *this* script hands to brew. A Node installed by a user toolchain manager (nvm, volta,
-# fnm) lives outside the fixed list above, so an update triggered from the service aborts with
-# "Node.js가 필요합니다" even though the same `brew upgrade dab` succeeds from a login shell.
-# The dab wrapper already exports the absolute node path the current keg was built against
-# (DAB_CLAUDE_SIDECAR_CMD = "<node> <tsx> <cli.ts>"), and this script inherits its env — reuse it.
+# fnm, asdf, mise, n) lives outside the fixed list above, so an update triggered from the
+# service aborts with "Node.js가 필요합니다" even though the same `brew upgrade dab` succeeds
+# from a login shell.
+#
+# find-node.sh is the one shared rule set for this (repo scripts/find-node.sh, installed into
+# libexec by the formula). Resolving here rather than reusing the path baked into
+# DAB_CLAUDE_SIDECAR_CMD matters when the user upgraded Node since install: the baked path is
+# then gone, and the old reuse-the-baked-path trick failed exactly when it was needed most.
+# The baked path is still handed over as the last-resort fallback.
+finder="$(dirname "$0")/find-node.sh"
 node_bin="${DAB_CLAUDE_SIDECAR_CMD:-}"
 node_bin="${node_bin%% *}"
+if [ -x "$finder" ]; then
+  # `VAR=x cmd` (a command prefix) so the child actually inherits it — `VAR=x OTHER=$(cmd)`
+  # would only set a local shell variable the subshell never sees.
+  resolved_node="$(DAB_NODE_FALLBACK_DIR="$(dirname "$node_bin")" /bin/bash "$finder" 2>/dev/null || true)"
+  [ -x "$resolved_node" ] && node_bin="$resolved_node"
+fi
 if [ -n "$node_bin" ] && [ -x "$node_bin" ]; then
   export PATH="$(dirname "$node_bin"):$PATH"
 fi
