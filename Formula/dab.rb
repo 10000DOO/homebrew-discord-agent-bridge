@@ -1,3 +1,5 @@
+require "etc"
+
 class Dab < Formula
   desc "Self-hosted Discord bot running Claude Code / Codex / Grok per channel (discord-agent-bridge)"
   homepage "https://github.com/10000DOO/discord-agent-bridge"
@@ -27,7 +29,19 @@ class Dab < Formula
     finder = buildpath/"scripts/find-node.sh"
     node = nil
     if finder.exist?
-      found = Utils.popen_read("/bin/bash", finder.to_s, err: :close).strip
+      # HOME is redirected to the build sandbox during `install` (verified: it points at
+      # buildpath), so the finder would look for ~/.nvm inside the extracted tarball and find
+      # nothing. Etc reads the passwd database directly and is therefore unaffected. PATH is
+      # restored to ORIGINAL_PATHS for the same reason `which(..., ORIGINAL_PATHS)` exists —
+      # superenv's build PATH deliberately excludes user toolchains.
+      real_home = Etc.getpwuid(Process.uid).dir
+      found = Utils.popen_read(
+        "/usr/bin/env",
+        "HOME=#{real_home}",
+        "PATH=#{ORIGINAL_PATHS.join(File::PATH_SEPARATOR)}",
+        "/bin/bash", finder.to_s,
+        err: :close
+      ).strip
       node = Pathname(found) if !found.empty? && File.executable?(found)
     end
     node ||= which("node", ORIGINAL_PATHS)
