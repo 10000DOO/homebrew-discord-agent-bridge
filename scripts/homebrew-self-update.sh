@@ -18,6 +18,18 @@ TOKEN="${2:-}"
 # cause swift/scripts/install.sh's generated run.sh works around for the dab process itself.
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:$PATH"
 
+# Formula#install probes Node with which("node", ORIGINAL_PATHS) — ORIGINAL_PATHS being the
+# PATH *this* script hands to brew. A Node installed by a user toolchain manager (nvm, volta,
+# fnm) lives outside the fixed list above, so an update triggered from the service aborts with
+# "Node.js가 필요합니다" even though the same `brew upgrade dab` succeeds from a login shell.
+# The dab wrapper already exports the absolute node path the current keg was built against
+# (DAB_CLAUDE_SIDECAR_CMD = "<node> <tsx> <cli.ts>"), and this script inherits its env — reuse it.
+node_bin="${DAB_CLAUDE_SIDECAR_CMD:-}"
+node_bin="${node_bin%% *}"
+if [ -n "$node_bin" ] && [ -x "$node_bin" ]; then
+  export PATH="$(dirname "$node_bin"):$PATH"
+fi
+
 DAB_HOME="$HOME/.dab"
 LOG_DIR="$DAB_HOME/logs"
 LOG_FILE="$LOG_DIR/homebrew-update.log"
@@ -97,6 +109,7 @@ restart_dab_service() {
 
 log "=== update start pid=$$ ==="
 log "APP_ID set=$([ -n "$APP_ID" ] && echo yes || echo no) TOKEN set=$([ -n "$TOKEN" ] && echo yes || echo no)"
+log "node visible to brew: $(command -v node || echo '<none>')"
 
 prev_version="$(brew list --versions dab 2>/dev/null | awk '{print $NF}')"
 log "previous version: ${prev_version:-<unknown>}"
