@@ -3,8 +3,8 @@ require "etc"
 class Dab < Formula
   desc "Self-hosted Discord bot running Claude Code / Codex / Grok per channel (discord-agent-bridge)"
   homepage "https://github.com/10000DOO/discord-agent-bridge"
-  url "https://github.com/10000DOO/discord-agent-bridge/archive/refs/tags/v3.7.10.tar.gz"
-  sha256 "810f47616626d9e8e11cdeb7a36b165011fef096378cb229533d83008bf4ccfb"
+  url "https://github.com/10000DOO/discord-agent-bridge/archive/refs/tags/v3.7.11.tar.gz"
+  sha256 "1f32ab74875ed86b48d4e925a3cf284aaabe94c9c38fe9a965574c75696fcf11"
   license "MIT"
 
   # Node.js and Swift are checked (not installed) in #install below — see the
@@ -97,6 +97,19 @@ class Dab < Formula
         (이 Formula는 Xcode/Swift를 자동으로 업데이트하지 않습니다.)
       EOS
     end
+
+    # DiscordBM 1.16.2 의 zstd 압축 해제 버그를 빌드 직전에 고친다 (swift/patches/ 참고).
+    #
+    # decompressStreamingChunk() 가 "출력 버퍼가 꽉 찼나"보다 "입력이 남았나"를 먼저 본다.
+    # 출력 버퍼가 모자라 ZSTD_decompressStream 이 중간에 멈추는 정상 상황을 깨진 프레임으로
+    # 오인해 예외를 던지고, 그 예외가 게이트웨이 수신 루프를 뚫고 나가 웹소켓이 1011 로 닫힌다.
+    # 길드의 GUILD_CREATE 페이로드가 커지는 순간부터 모든 접속이 READY 몇 초 뒤 죽고,
+    # 재접속이 무한 반복되다 Discord 가 봇 토큰을 리셋한다.
+    #
+    # resolve 가 의존성을 새로 받아오면서 로컬 수정을 지우므로, build 전에 resolve 를 따로
+    # 돌린 뒤 패치를 입힌다. patch-deps.sh 는 여러 번 돌려도 안전하다.
+    system swift, "package", "--package-path", "swift", "resolve", "--disable-sandbox"
+    system "bash", "swift/scripts/patch-deps.sh"
 
     # Swift 실행 파일 빌드 (executable product "dab" -> swift/.build/release/dab)
     # --disable-sandbox: Homebrew의 install 단계는 이미 자체 sandbox-exec 안에서 돈다.
